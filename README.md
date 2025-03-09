@@ -46,7 +46,3 @@ The dataset, referred to as `fish_clean`, is derived from raw sonar readings and
 
 ## Acknowledgments
 Special thanks to the STA2453 professor for guidance and dataset provision.
-
-## License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
