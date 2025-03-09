@@ -1,5 +1,3 @@
-# FishClassificationWithSnoar
-
 # Fish Classification Project
 
 ## Overview
@@ -8,7 +6,7 @@ This repository contains the code and data analysis for a fish classification pr
 ## Dataset
 The dataset, referred to as `fish_clean`, is derived from raw sonar readings and biological measurements of fish. Key details include:
 - Two species: **Lake Trout (LT)** and **Smallmouth Bass (SMB)**
-- **Biological Features**: Length, weight, girth, airbladder measurements, and sex.
+- **Biological Features**: Length, weight, girth, air bladder measurements, and sex.
 - **Frequency Response Data**: Sonar frequency responses across multiple frequency bands.
 - **Preprocessing Steps**: Missing value handling, PCA for dimensionality reduction, and selection of relevant biological and frequency features.
 
@@ -40,7 +38,11 @@ The dataset, referred to as `fish_clean`, is derived from raw sonar readings and
 ## Key Findings
 - PCA alone does not effectively separate species due to overlapping frequency responses.
 - The frequencies are correlated so Bonferroni correction cannot be applied
-
+  
+## Usage
+- Run ExploratoryDataAnalysis.Rmd first to get fish_clean and freq_clean that will be used in the modeling stage
+- Run Model.Rmd
+  
 ## Contributors
 - **Phyllis Sun** (Fengyi Sun) - University of Toronto
 
