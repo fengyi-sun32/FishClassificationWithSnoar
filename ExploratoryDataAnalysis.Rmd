@@ -4,8 +4,836 @@ author: "Phyllis Sun"
 date: "2025-03-09"
 output: html_document
 ---
+```{r}
+# Load required libraries
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(FactoMineR)
+library(factoextra)
+library(purrr)
+library(reshape2)
+library(gridExtra)
+```
+
+
+```{r}
+#' Read and preprocess the data
+#'
+#' This script reads processed fish sonar data and prepares it for analysis.
+#' The dataset includes fish species, biological characteristics, and frequency response values.
+#' @source This function relies on the external script: `read_tidy_export_EVfiles.R`
+source('Analysis_Scripts/read_tidy_export_EVfiles.R')
+
+```
+
+# Data Checking ---------------------------------------------------------
+
+```{r}
+#' Filter dataset to retain only Lake Trout and Smallmouth Bass
+#'
+#' @description
+#' This dataset contains multiple fish species, but this function filters
+#' the data to include only Lake Trout (`lakeTrout`) and Smallmouth Bass (`smallmouthBass`).
+#'
+#' @return A filtered tibble containing metadata, biological features, and frequency responses.
+fish_data <- processed_data %>%
+  filter(species %in% c("lakeTrout", "smallmouthBass")) %>%
+  select(
+    # Fish metadata
+    fishNum, species,
+
+    # Biological features
+    totalLength, forkLength, weight, girth, dorsoLatHeight, sex,
+    airbladderTotalLength, airBladderWidth, airbladderWeight,
+
+    # Frequency response columns
+    matches("^F\\d+(\\.\\d+)?$")
+  )
+
+```
+
+```{r}
+#' Extract frequency-only data
+#'
+#' @description
+#' Creates a dataset containing only the fish number, species, and frequency response columns.
+#'
+#' @return A tibble with only frequency response data.
+freq_only <- fish_data %>%
+  select(fishNum, species, matches("^F\\d+(\\.\\d+)?$"))
+
+# Check number of pings per fish
+table(fish_data$fishNum)
+
+```
+```{r}
+#' Identify missing frequency values per fish
+#'
+#' @description
+#' This function calculates the number of missing frequency values for each fish.
+#'
+#' @return A tibble containing the count of missing values per fish.
+missing_per_fish <- freq_only %>%
+  group_by(fishNum, species) %>%
+  summarise(
+    missing_count = sum(is.na(across(starts_with("F")))),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(missing_count))
+
+
+#' Plot missing frequency values per fish
+ggplot(missing_per_fish, aes(x = reorder(fishNum, -missing_count), 
+                             y = missing_count, 
+                             fill = species)) +
+  geom_col() +
+  labs(
+    title = "Missing Frequency Values Per Fish",
+    x = "Fish ID", 
+    y = "Number of Missing Values",
+    fill = "Species"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  scale_fill_manual(values = c("lakeTrout" = "#1f77b4", "smallmouthBass" = "#ff7f0e"))
+
+```
+```{r}
+# First identify fish with any missing frequencies
+fish_with_missing <- missing_per_fish %>% 
+  filter(missing_count > 0) %>% 
+  pull(fishNum)
+
+# Calculate frequency of missingness across these fish
+missing_freq_dist <- freq_only %>%
+  filter(fishNum %in% fish_with_missing) %>%
+  summarise(across(starts_with("F"), 
+                   ~sum(is.na(.)))) %>%
+  pivot_longer(everything(), 
+               names_to = "Frequency", 
+               values_to = "missing_count") %>%
+  mutate(Frequency = as.numeric(gsub("F", "", Frequency))) %>%
+  filter(missing_count > 0)  # Remove frequencies with no missing values
+# Step 1: Identify missing frequencies for each fish
+missing_heatmap_data <- freq_only %>%
+  group_by(fishNum, species) %>%
+  summarise(across(starts_with("F"), ~any(is.na(.))), .groups = "drop") %>%
+  pivot_longer(
+    cols = -c(fishNum, species),
+    names_to = "Frequency",
+    values_to = "is_missing"
+  ) %>%
+  mutate(Frequency = as.numeric(gsub("F", "", Frequency))) %>%
+  filter(is_missing)  # Keep only missing frequencies
+
+# Step 2: Create the heatmap
+ggplot(missing_heatmap_data, aes(x = Frequency, y = reorder(fishNum, Frequency))) +
+  geom_tile(aes(fill = species), color = "white", linewidth = 0.2) +
+  labs(
+    title = "Missing Frequencies by Fish",
+    x = "Frequency (kHz)",
+    y = "Fish ID",
+    fill = "Species"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    axis.text.y = element_text(size = 6)
+  ) +
+  scale_fill_manual(values = c("lakeTrout" = "#1f77b4", "smallmouthBass" = "#ff7f0e")) +
+  scale_x_continuous(breaks = seq(45, 260, by = 25))  # Adjust frequency breaks as needed
+```
+# Data Cleaning ----------------------------------------------------------
+
+```{r}
+#' Identify missing values for a specific fish (LT008) in 173–260 kHz range
+#'
+#' @return A tibble showing the percentage of missing values per frequency.
+lt008_missing <- fish_data %>%
+  filter(fishNum == "LT008") %>%
+  select(matches("^F(17[3-9]|1[89][0-9]|2[0-5][0-9]|260)")) %>%  # Regex for 173–260 kHz
+  summarise_all(~sum(is.na(.))) %>%
+  pivot_longer(everything(), names_to = "Frequency", values_to = "Missing") %>%
+  mutate(Missing_Pct = Missing / nrow(fish_data %>% filter(fishNum == "LT008")) * 100)
+
+#' Remove LT008 if mean missingness >50%
+if (mean(lt008_missing$Missing_Pct) > 50) {
+  fish_data <- fish_data %>%
+    filter(fishNum != "LT008")
+}
+
+if (mean(lt008_missing$Missing_Pct) > 50) {
+  freq_only <- freq_only %>%
+    filter(fishNum != "LT008")
+}
+
+```
+
+In the dataset, Lake Trout 008 (LT008) was identified as having more than 50% missing values in the 173–260 kHz frequency range. Based on a threshold of 50% missing data, LT008 was considered an outlier and removed from further analysis to ensure data completeness and reliability.
+
+```{r}
+#' Exclude specific frequency ranges
+missing_freq <- seq(90, 170, by = 0.5)
+
+freq_clean <- freq_only  %>% 
+  select(-any_of(paste0("F", missing_freq)))
+
+fish_clean <- fish_data %>%
+  select(-all_of(paste0("F", missing_freq)))
+```
+
+
+# Data Transformation for Visualization -----------------------------------
+```{r}
+#' Convert frequency and sex values to numeric
+freq_clean <- freq_clean %>%
+  mutate(across(starts_with("F"), ~ type.convert(.x, as.is = TRUE)))
+fish_clean <- fish_clean %>%
+  mutate(
+    across(starts_with("F"), ~ type.convert(.x, as.is = TRUE)),  # Convert frequency columns
+    sex = as.numeric(sex)  # Convert sex to numeric
+  )
+```
+
+```{r}
+#' Transform frequency data into long format for visualization
+freq_long <- freq_clean %>%
+  select(species, any_of(paste0("F", seq(45, 260, by = 0.5))))%>%
+  pivot_longer(
+    cols = starts_with("F"),          # Select only frequency columns
+    names_to = "Frequency",
+    values_to = "Strength",
+  ) %>%
+  mutate(Frequency_kHz = as.numeric(gsub("F", "", Frequency)))
+```
+
+
+```{r}
+#' Compute mean strength per frequency per fish before pivoting
+fish_freq_mean_wide <- freq_clean %>%
+  group_by(fishNum, species) %>%  
+  summarise(across(starts_with("F"), 
+                   \(x) mean(x, na.rm = TRUE)), 
+            .groups = "drop")
+
+#' Convert to long format for plotting
+fish_freq_mean_long <- fish_freq_mean_wide %>%
+  select(species, any_of(paste0("F", seq(45, 260, by = 0.5)))) %>%
+  pivot_longer(
+    cols = starts_with("F"),
+    names_to = "Frequency",
+    values_to = "Mean_Strength"
+  ) %>%
+  mutate(Frequency_kHz = as.numeric(gsub("F", "", Frequency)))  # Convert "F45" to 45
+
+```
+
+```{r}
+#' Compute mean strength per species per frequency
+species_mean <- freq_long %>%
+  group_by(species, Frequency_kHz) %>%  # Use numeric Frequency_kHz instead of "Frequency"
+  summarize(frequency_mean_strength = mean(Strength, na.rm = TRUE), 
+            .groups = "drop")
+#' Compute corresponding CI 
+species_mean_ci <- freq_long %>%
+  group_by(species, Frequency_kHz) %>%
+  summarise(
+    frequency_mean_strength = mean(Strength, na.rm = TRUE),
+    lower = frequency_mean_strength - 1.96 * sd(Strength, na.rm = TRUE) / sqrt(n()),
+    upper = frequency_mean_strength + 1.96 * sd(Strength, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+```
+
+```{r, fig.width=20, fig.height=15}
+
+ggplot() +
+  # Scatter points for individual fish mean strengths
+  geom_point(data = fish_freq_mean_long, 
+             aes(x = Frequency_kHz, y = Mean_Strength, color = species), 
+             alpha = 0.5, size = 0.5) +  
+
+  # Labels & theme
+  labs(title = "Mean Strength per Fish Across Frequencies",
+       x = "Frequency (kHz)",
+       y = "Mean Strength",
+       color = "Fish Species") +
+  theme_minimal() +
+
+  # Custom colors for fish species
+  scale_color_manual(name = "Fish Species", 
+                     values = c("lakeTrout" = "deepskyblue",   
+                                "smallmouthBass" = "tomato")) +  
+
+  # Cut the x-axis to hide 90-170 kHz region
+  scale_x_continuous(breaks = c(seq(45, 85, by = 10), seq(170, 260, by = 25)),  
+                     limits = c(45, 260))  
+
+```
+
+```{r, fig.width=12, fig.height=5}
+#' Add a new column to classify frequency ranges
+fish_freq_mean_long <- fish_freq_mean_long %>%
+  mutate(Frequency_Range = case_when(
+    Frequency_kHz >= 45 & Frequency_kHz <= 90 ~ "45-90 kHz",
+    Frequency_kHz >= 173 & Frequency_kHz <= 260 ~ "173-260 kHz",
+    TRUE ~ NA_character_  # Exclude middle range
+  )) %>%
+  filter(!is.na(Frequency_Range))  # Remove NA values (90-170 kHz)
+
+fish_mean_long <- fish_freq_mean_long %>%
+  mutate(Frequency_Range = factor(Frequency_Range, 
+                                  levels = c("45-90 kHz", "173-260 kHz")))
+
+#' Plot two frequency range separately 
+ggplot(fish_freq_mean_long, aes(x = Frequency_kHz, 
+                                y = Mean_Strength, 
+                                color = species)) +
+  geom_point(size = 0.8,alpha = 0.7) +  # Individual fish trends
+  facet_wrap(~ Frequency_Range, scales = "free_x") +  # Separate panels for each frequency range
+  labs(
+    title = "Mean Strength per Fish Across Two Frequency Ranges",
+    x = "Frequency (kHz)",
+    y = "Mean Strength",
+    color = "Fish Species"
+  ) +
+  theme_minimal()
+```
+
+
+
+```{r}
+#' Compute mean and 95% confidence interval
+#'
+#' @param x Numeric vector.
+#' @param confidence Confidence level (default: 0.95).
+#' @return A tibble with mean, lower, and upper confidence bounds.
+compute_ci <- function(x, confidence = 0.95) {
+  n <- sum(!is.na(x))  # Ensure NA values don't count in length
+  mean_x <- mean(x, na.rm = TRUE)
+  stderr <- sd(x, na.rm = TRUE) / sqrt(n)  # Standard Error
+  
+  # Avoid calculation errors if n < 2
+  if (n < 2) {
+    return(tibble(mean = NA, lower = NA, upper = NA))
+  }
+  
+  error_margin <- qt(1 - (1 - confidence) / 2, df = n - 1) * stderr  # t-score * SE
+  
+  tibble(
+    mean = mean_x,
+    lower = mean_x - error_margin,
+    upper = mean_x + error_margin
+  )
+}
+
+# Get unique fish IDs
+labelled_fish <- unique(freq_clean$fishNum)
+
+#' Generate and print confidence interval plots for each fish
+plot_fish_ci <- function(fish_id) {
+  one_fish_data <- freq_clean %>%
+    filter(fishNum == fish_id) %>%
+    select(species, any_of(paste0("F", seq(45, 260, by = 0.5)))) %>%
+    pivot_longer(
+      cols = starts_with("F"),
+      names_to = "Frequency",
+      values_to = "Strength"
+    ) %>%
+    mutate(Frequency = as.numeric(gsub("F", "", Frequency)))  # Convert "F45" to 45
+  
+  # Compute mean and confidence intervals per frequency
+  ci_data <- one_fish_data %>%
+    group_by(Frequency) %>%
+    summarise(compute_ci(Strength), .groups = "drop") %>%
+    arrange(Frequency)
+  
+  # Generate plot
+  ggplot(ci_data, aes(x = Frequency, y = mean)) +
+    geom_line(color = "blue") +  
+    geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.3, fill = "blue") +  
+    labs(
+      title = paste(fish_id, "Mean Strength with 95% Confidence Interval"),
+      x = "Frequency (Hz)",
+      y = "Strength"
+    ) +
+    theme_minimal()
+}
+
+#' Generate plots for all fish in parallel using `walk()`
+walk(labelled_fish, ~ print(plot_fish_ci(.x)))
+```
+
+```{r}
+#' Compute total number of unique frequencies per fish
+n_frequencies <- length(c(seq(45, 89.5, by = 0.5), seq(173, 260, by = 0.5)))
+
+#' Count number of observations per fish
+fish_counts <- freq_clean %>%
+  count(fishNum)
+
+#' Repeat fishNum based on pre-pivot row counts
+fishNum_vector <- rep(fish_counts$fishNum, 
+                      times = fish_counts$n * n_frequencies)  # Repeat for each fish
+
+#' Ensure correct length before assigning fishNum back
+if (length(fishNum_vector) == nrow(freq_long)) {
+  freq_long_with_id <- freq_long
+  freq_long_with_id$fishNum <- fishNum_vector
+} else {
+  stop("Mismatch in row counts: Check n_frequencies calculation and fish observations")
+}
+
+#' Add fishNum back
+freq_long_with_id <- freq_long 
+freq_long_with_id$fishNum <- fishNum_vector
+```
+
+```{r}
+#' Detect outliers per frequency per fish
+outliers_per_fish <- freq_long_with_id %>% 
+  group_by(fishNum, Frequency) %>%  # Compute outliers PER frequency PER fish
+  mutate(
+    Q1 = quantile(Strength, 0.25, na.rm = TRUE),
+    Q3 = quantile(Strength, 0.75, na.rm = TRUE),
+    IQR = Q3 - Q1,
+    Lower_Bound = Q1 - 1.5 * IQR,
+    Upper_Bound = Q3 + 1.5 * IQR,
+    Outlier = Strength < Lower_Bound | Strength > Upper_Bound
+  ) %>%
+  ungroup()
+
+#' Extract only outliers
+outliers_detected <- outliers_per_fish %>%
+  filter(Outlier == TRUE)
+
+#' Print outlier details
+print(outliers_detected)
+```
+
+```{r}
+#' Define a threshold for rare outliers
+outlier_percentage <- 0.0005  
+
+#' Count total observations per fish
+fish_observation_counts <- freq_long_with_id %>%
+  count(fishNum, name = "total_obs")
+
+#' Count outliers per fish per frequency
+outliers_summary <- outliers_per_fish %>%
+  filter(Outlier) %>%
+  count(fishNum, Frequency, name = "outlier_count") %>%
+  left_join(fish_observation_counts, by = "fishNum") %>%
+  mutate(threshold = total_obs * outlier_percentage)  # Compute threshold dynamically
+
+print(outliers_summary)
+
+#' Identify outliers that are "rare" based on the threshold
+low_outlier_frequencies <- outliers_summary %>%
+  filter(outlier_count <= threshold) %>%
+  select(fishNum, Frequency)
+
+#' Remove only rare outliers
+clean_freq_data <- outliers_per_fish %>%
+  anti_join(
+    low_outlier_frequencies %>% mutate(Outlier = TRUE), 
+    by = c("fishNum", "Frequency", "Outlier")
+  )
+print(clean_freq_data)
+
+
+```
+
+```{r}
+#' Compute mean strength per frequency per fish BEFORE outlier removal
+mean_strength_before <- freq_long_with_id %>%
+  group_by(fishNum, Frequency) %>%
+  summarise(
+    mean_strength = mean(Strength, na.rm = TRUE), 
+    .groups = "drop"
+  )
+
+#' Compute mean strength per frequency per fish AFTER outlier removal
+mean_strength_after <- clean_freq_data %>%
+  group_by(fishNum, Frequency) %>%
+  summarise(
+    mean_strength = mean(Strength, na.rm = TRUE), 
+    .groups = "drop"
+  )
+
+#' Compute the difference in mean strength before and after outlier removal
+mean_difference <- mean_strength_before %>%
+  inner_join(mean_strength_after, 
+             by = c("fishNum", "Frequency"), 
+             suffix = c("_before", "_after")) %>%
+  mutate(change = mean_strength_after - mean_strength_before) %>%
+  arrange(desc(abs(change)))  # Sort by largest absolute change
+
+#' Print summary of mean differences
+print(mean_difference)
+```
 
 ```{r}
 
+#' Plot the distribution of changes in mean strength after outlier removal
+#'
+#' This histogram visualizes the distribution of differences in mean strength 
+#' per frequency per fish before and after outlier removal.
+ggplot(mean_difference, aes(x = change)) +
+  geom_histogram(
+    bins = 50, 
+    fill = "blue", 
+    alpha = 0.5
+  ) +
+  labs(
+    title = "Distribution of Changes in Mean Strength Per Frequency Per Fish",
+    x = "Change in Mean Strength (After - Before)",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),  # Centered bold title
+    axis.title.x = element_text(face = "bold"),  # Bold x-axis label
+    axis.title.y = element_text(face = "bold")   # Bold y-axis label
+  )
+
+```
+Actually we can see no big change, most changes are near 0. So, I decide to keep these outliers. 
+```{r}
+
+# Select only frequency response columns for PCA
+pca_data <- freq_clean %>%
+  select(any_of(paste0("F", seq(45, 260, by = 0.5)))) %>%
+  drop_na()  # Remove missing values
+
+# Perform PCA
+pca_result <- PCA(pca_data, scale.unit = TRUE, graph = FALSE)
+
+# Scree plot: Variance explained by each principal component
+fviz_eig(pca_result, addlabels = TRUE, ylim = c(0, 50))
+
+# Extract PC scores for plotting
+pca_scores <- as.data.frame(pca_result$ind$coord) %>%
+  mutate(species = freq_clean$species)  # Add species labels back
+
+# Extract explained variance from PCA results
+explained_variance <- pca_result$eig[, 2]  # Get percentage of variance explained
+pc1_var <- round(explained_variance[1], 2)  # Variance explained by PC1
+pc2_var <- round(explained_variance[2], 2)  # Variance explained by PC2
+
+# PCA scatter plot with percentage on axes
+ggplot(pca_scores, aes(x = Dim.1, y = Dim.2, color = species)) +
+  geom_point(alpha = 0.7) +
+  labs(title = "PCA of Frequency Response Data",
+       x = paste0("Principal Component 1 (PC1) - ", pc1_var, "% Variance"),
+       y = paste0("Principal Component 2 (PC2) - ", pc2_var, "% Variance"),
+       color = "Species") +
+  theme_minimal()
+```
+
+PC1 explains 48.59% of the variance, so it contains meaningful information, but it's not fully separating species.
+PC2 explains only 6.93%, which is quite low—this suggests PC2 might not be informative for classification.
+The overlapping points indicate that frequency response patterns between species are not easily distinguished using just these two components.
+
+```{r}
+# Extract PCA loadings
+loadings <- as.data.frame(pca_result$var$coord)  # Get the PCA variable coordinates
+
+# Sort and display top contributing features for PC1 and PC2
+top_PC1 <- loadings %>%
+  arrange(desc(abs(Dim.1))) %>%
+  head(10)  # Top 10 most important frequencies for PC1
+
+top_PC2 <- loadings %>%
+  arrange(desc(abs(Dim.2))) %>%
+  head(10)  # Top 10 most important frequencies for PC2
+
+# Print the most influential frequency variables
+print("Top contributing frequencies for PC1:")
+print(top_PC1)
+
+print("Top contributing frequencies for PC2:")
+print(top_PC2)
+
+```
+PCA does not work well due to the overlapping. 
+
+```{r}
+#' Plot PCA Biplot: Frequency Contributions & Species Clusters
+#'
+#' - Displays frequency contributions as variable arrows.
+#' - Colors variables based on contribution.
+#' - Makes individual fish data less prominent.
+#' - Uses `repel = TRUE` to avoid text overlap.
+fviz_pca_biplot(
+  pca_result,
+  label = "var",       # Show frequency labels
+  col.var = "contrib", # Color by contribution
+  col.ind = "gray",    # Make fish data less prominent
+  repel = TRUE         # Avoid overlapping text
+) +
+  labs(
+    title = "PCA Biplot: Frequency Contributions & Species Clusters",
+    x = "Principal Component 1 (PC1)",  # Explicit axis labels
+    y = "Principal Component 2 (PC2)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 12, face = "bold", hjust = 0.5),  # Centered & bold title
+    axis.title.x = element_text(face = "bold"),  # Bold x-axis label
+    axis.title.y = element_text(face = "bold")   # Bold y-axis label
+  )
+```
+From this visualization, we observe that the most important frequencies fall within the 63–77 kHz range, contributing significantly to PC1, which explains 48.6% of the total variance. These frequencies likely capture broad variations in fish frequency responses, but their role in distinguishing species remains uncertain.
+
+```{r}
+# Define a function to compute and plot correlation heatmaps per species
+plot_species_corr <- function(species_name, data) {
+  # Filter data for the selected species
+  species_data <- data %>% filter(species == species_name) %>%
+    select(any_of(paste0("F", seq(45, 260, by = 0.5))))
+  
+  # Compute correlation matrix
+  corr_matrix <- cor(species_data, use = "pairwise.complete.obs", method = "pearson")
+  
+  # Convert to long format for plotting
+  corr_long <- melt(corr_matrix)
+  
+  # Generate heatmap
+  ggplot(corr_long, aes(x = Var1, y = Var2, fill = value)) +
+    geom_tile() +
+    scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+    labs(title = paste("Heatmap of Frequency Correlations for", species_name),
+         x = "Frequency (kHz)",
+         y = "Frequency (kHz)",
+         fill = "Correlation") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+      plot.title = element_text(size = 8, face = "bold")  # Adjust title size here
+    )
+}
+# Generate heatmaps separately for Lake Trout and Smallmouth Bass
+p1 <- plot_species_corr("lakeTrout", freq_clean)
+p2 <- plot_species_corr("smallmouthBass", freq_clean)
+grid.arrange(p1, p2, ncol = 2)
+```
+Since the frequency is obviously not independent to each other I decide not to use Bonferroni correction. 
+
+```{r}
+# Function to compute highly correlated frequencies for a given species
+identify_highly_correlated_frequencies <- function(data, species_name, threshold = 0.7) {
+  # Filter data for the given species
+  species_data <- data %>%
+    filter(species == species_name) %>%
+    select(any_of(paste0("F", seq(45, 260, by = 0.5))))
+
+  # Compute correlation matrix
+  corr_matrix <- cor(species_data, use = "pairwise.complete.obs")
+
+  # Convert correlation matrix into a long format
+  corr_long <- as.data.frame(as.table(corr_matrix)) %>%
+    rename(Frequency1 = Var1, Frequency2 = Var2, Correlation = Freq) %>%
+    filter(Frequency1 != Frequency2 & abs(Correlation) > threshold)  # Filter for strong correlations
+
+  # Remove duplicate pairs (e.g., F45-F50 is the same as F50-F45)
+  corr_long <- corr_long %>%
+    rowwise() %>%
+    mutate(FreqPair = paste(sort(c(Frequency1, Frequency2)), collapse = "-")) %>%
+    distinct(FreqPair, .keep_all = TRUE) %>%
+    select(-FreqPair)
+
+  return(corr_long)
+}
+
+# Identify highly correlated frequencies for each species
+corr_tbl_lt <- highly_corr_LakeTrout <- identify_highly_correlated_frequencies(freq_clean, "lakeTrout", threshold = 0.7)
+corr_tbl_smb <- highly_corr_SmallmouthBass <- identify_highly_correlated_frequencies(freq_clean, "smallmouthBass", threshold = 0.7)
+
+# Display top correlated frequency pairs for each species
+print("Highly Correlated Frequencies (Lake Trout):")
+print(head(corr_tbl_lt, 10))
+
+print("Highly Correlated Frequencies (Smallmouth Bass):")
+print(head(corr_tbl_smb, 10))
+
+```
+
+```{r}
+# Function to compute correlations of feature for each species
+compute_feature_correlation <- function(species_name) {
+  species_data <- fish_clean %>%
+    filter(species == species_name) %>%  # Filter species
+    mutate(sex = as.numeric(sex)) %>%
+    select(sex, totalLength, forkLength, weight, girth, 
+           airbladderTotalLength, airBladderWidth, airbladderWeight, 
+           matches("^F\\d+(\\.\\d+)?$"))  # Select bio features + frequencies
+  # Compute correlation matrix
+  cor_matrix <- cor(species_data, use = "pairwise.complete.obs")
+
+  # Convert to long format for visualization
+  cor_long <- as.data.frame(as.table(cor_matrix)) %>%
+    rename(Variable1 = Var1, Variable2 = Var2, Correlation = Freq) %>%
+    filter(Variable1 %in% c("sex", "totalLength", "forkLength", "weight", "girth", 
+                            "airbladderTotalLength", "airBladderWidth", "airbladderWeight") &
+           grepl("^F", Variable2))  # Keep only correlations between bio traits & frequencies
+  
+  cor_long$species <- species_name  # Add species label
+  return(cor_long)
+}
+
+# Compute correlations separately
+cor_lake_trout <- compute_feature_correlation("lakeTrout")
+cor_smallmouth_bass <- compute_feature_correlation("smallmouthBass")
+
+# Combine results
+species_corr <- bind_rows(cor_lake_trout, cor_smallmouth_bass)
+species_corr
+```
+```{r}
+# Set correlation threshold for counting high correlations
+cor_threshold <- 0.4  
+
+# Process each species separately
+species_summary <- species_corr %>%
+  group_by(species, Variable1) %>%
+  summarise(
+    Max_Correlation = max(abs(Correlation), na.rm = TRUE),  # Max absolute correlation
+    Mean_Correlation = mean(abs(Correlation), na.rm = TRUE),  # Mean absolute correlation
+    Frequency_Count = sum(abs(Correlation) > cor_threshold, na.rm = TRUE),  # Count of high correlations
+    Max_Correlation_Frequency = Variable2[which.max(abs(Correlation))],  # Frequency with max correlation
+    .groups = "drop"
+  ) %>%
+  arrange(species, desc(Max_Correlation))  # Sort by species & descending max correlation
+
+# View the cleaned summary table
+species_summary
+
+```
+
+
+```{r}
+#' Prepare correlation data by extracting frequency and binning
+species_corr <- species_corr %>%
+  mutate(
+    Frequency_kHz = as.numeric(gsub("^F", "", Variable2)),  # Extract numeric frequency
+    Frequency_Bin = round(Frequency_kHz / 10) * 10          # Bin frequencies by 10 kHz
+  ) %>%
+  group_by(species, Variable1, Frequency_Bin) %>%
+  summarise(
+    Mean_Correlation = mean(Correlation, na.rm = TRUE), 
+    .groups = "drop"
+  )
+
+#' Plot heatmap of species-specific correlations between biological features and frequency response
+ggplot(species_corr, aes(x = Frequency_Bin, y = Variable1, fill = Mean_Correlation)) +
+  geom_tile() +
+  facet_wrap(~species) +  # Separate heatmap per species
+  scale_fill_gradient2(
+    low = "blue", mid = "white", high = "red", midpoint = 0
+  ) +
+  labs(
+    title = "Species-Specific Correlation Between Biological Features and Frequency Response",
+    x = "Frequency (kHz, Binned by 10)",
+    y = "Biological Features",
+    fill = "Correlation"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 10, face = "bold", hjust = 0.5),  # Adjust title size, bold, and center
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(size = 10, face = "bold")  # Adjust facet labels
+  )
+
+```
+The heatmap reveals species-specific patterns in the correlation between biological features and frequency response. For Lake Trout, air bladder width exhibits the strongest correlation, particularly around F67, suggesting that this feature plays a dominant role in shaping the acoustic response of the species. Other features such as weight and girth show moderate but consistent correlations across multiple frequencies, indicating a broader but less pronounced influence. In contrast, for Smallmouth Bass, the strongest correlation is observed with girth, weight, and fork length, particularly around F174, suggesting that body shape and size have a greater impact on the species' frequency response patterns than air bladder width. These differences highlight distinct acoustic signatures driven by species morphology, which are critical for classification tasks. The heatmap is particularly useful for detecting broad trends, ensuring that key relationships are not missed when selecting frequency bands for predictive modeling.
+
+```{r}
+# Select relevant biological features
+bio_features <- c("totalLength", "forkLength", "weight", "girth", "sex"
+                  "airbladderTotalLength", "airBladderWidth", "airbladderWeight")
+
+# Convert data to long format for easier visualization
+bio_long <- fish_clean %>%
+  select(species, all_of(bio_features)) %>%
+  pivot_longer(-species, names_to = "Feature", values_to = "Value")
+
+# Plot boxplots by species
+ggplot(bio_long, aes(x = species, y = Value, fill = species)) +
+  geom_boxplot(alpha = 0.6, outlier.colour = "red", outlier.size = 1) +
+  facet_wrap(~Feature, scales = "free_y") +
+  labs(title = "Boxplots of Biological Features by Species",
+       x = "Species", y = "Value") +
+  theme_minimal() +
+  theme(legend.position = "none", strip.text = element_text(size = 5, face = "bold"))
+
+```
+```{r}
+# Define biological features of interest
+bio_features <- c("totalLength", "forkLength", "weight", "girth", 
+                  "airbladderTotalLength", "airBladderWidth", "airbladderWeight")
+
+# Filter out invalid sex values (if any) and pivot to long format
+df_sex_long <- fish_clean %>%
+  filter(sex %in% c("2", "1")) %>%    
+  select(species, sex, all_of(bio_features)) %>%
+  pivot_longer(cols = -c(species, sex), names_to = "Feature", values_to = "Value")
+
+# Boxplots by sex within each species
+ggplot(df_sex_long, aes(x = sex, y = Value, fill = sex)) +
+  geom_boxplot(alpha = 0.7, outlier.colour = "red") +
+  facet_grid(species ~ Feature, scales = "free_y") +  # separate species by rows, features by columns
+  labs(
+    title = "Comparison of Biological Features by Sex Within Each Species",
+    x = "Sex",
+    y = "Value"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+
+```{r}
+# Example correlation threshold
+cor_threshold <- 0.5  
+
+# Biological + frequency columns
+bio_freq_cols <- c("totalLength", "forkLength", "weight", "girth", 
+                   "airbladderTotalLength", "airBladderWidth", "airbladderWeight",
+                   grep("^F\\d+(\\.\\d+)?$", names(fish_clean), value = TRUE))
+
+# Function to compute correlation for a given species & sex
+compute_sex_corr <- function(species_name, sex_label) {
+  # Filter data
+  subset_data <- fish_clean %>%
+    filter(species == species_name, sex == sex_label) %>%
+    select(all_of(bio_freq_cols)) %>%
+    mutate(across(everything(), as.numeric))  # Ensure numeric
+
+  # Compute correlation matrix
+  cor_matrix <- cor(subset_data, use = "pairwise.complete.obs")
+
+  # Convert to long format
+  cor_df <- as.data.frame(as.table(cor_matrix)) %>%
+    rename(Variable1 = Var1, Variable2 = Var2, Correlation = Freq) %>%
+    filter(Variable1 %in% bio_features & grepl("^F", Variable2))  # Only keep bio vs freq
+
+  cor_df$species <- species_name
+  cor_df$sex <- sex_label
+  return(cor_df)
+}
+
+corr_lt_male <- compute_sex_corr("lakeTrout", "2")
+corr_lt_female <- compute_sex_corr("lakeTrout", "1")
+all_sex_corr_lt <- rbind(corr_lt_male, corr_lt_female)
+print(all_sex_corr_lt %>% arrange(desc(Correlation))) 
+
+corr_smb_male <- compute_sex_corr("smallmouthBass", "2")
+corr_smb_female <- compute_sex_corr("smallmouthBass", "1")
+all_sex_corr_smb <- rbind(corr_smb_male, corr_smb_female)
+print(all_sex_corr_smb %>% arrange(desc(Correlation)))
 ```
 
