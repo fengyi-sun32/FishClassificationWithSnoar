@@ -172,7 +172,8 @@ data.frame(
 ```
 
 ```{r}
-#' Train and evaluate XGBoost model
+
+ #' Train and evaluate XGBoost model
 #'
 #' @description
 #' This function trains an XGBoost model and computes test accuracy.
@@ -181,7 +182,8 @@ data.frame(
 #' @param Y_train Training labels.
 #' @param X_test Test feature matrix.
 #' @param Y_test Test labels.
-#' @return A trained XGBoost model and accuracy score.
+#' @return balanced accuracy score,confusion matrix and AUC-ROC scores.
+
 train_xgboost <- function(X_train, Y_train, X_test, Y_test) {
   X_train_mat <- as.matrix(X_train)
   X_test_mat  <- as.matrix(X_test)
@@ -195,7 +197,28 @@ train_xgboost <- function(X_train, Y_train, X_test, Y_test) {
   accuracy <- mean(final_predictions == Y_test) * 100
   message("XGBoost Test Accuracy: ", round(accuracy, 2), "%")
   
-  return(xgb_model)
+  # Compute confusion matrix
+  conf_matrix <- confusionMatrix(as.factor(final_predictions), as.factor(Y_test))
+  print(conf_matrix)
+  
+  # Extract sensitivity and specificity
+  sensitivity_value <- conf_matrix$byClass["Sensitivity"]
+  specificity_value <- conf_matrix$byClass["Specificity"]
+  
+  # Compute Balanced Accuracy
+  balanced_accuracy <- (sensitivity_value + specificity_value) / 2
+  message("Balanced Accuracy: ", round(balanced_accuracy, 4))
+  
+  # Compute AUC-ROC score
+  roc_curve <- roc(Y_test, predictions)  # ROC curve
+  auc_value <- auc(roc_curve)  # AUC score
+  message("AUC-ROC Score: ", round(auc_value, 4))
+  
+  return(list(
+    ConfusionMatrix = conf_matrix,
+    BalancedAccuracy = balanced_accuracy,
+    AUC = auc_value
+  ))
 }
 
 # Train XGBoost Model
@@ -204,37 +227,6 @@ xgb_model <- train_xgboost(X2_train, Y2_train, X2_test, Y2_test)
 ```
 
 
-```{r}
-library(randomForest)
 
-# Convert Y2_train to a factor (required for classification)
-Y2_train_factor <- as.factor(Y2_train)
-
-# Train a Random Forest model with 200 trees
-rf_model <- randomForest(x = X2_train, y = Y2_train_factor, 
-                         ntree = 200, importance = TRUE)
-
-# Print model summary
-print(rf_model)
-
-# Predict on test data
-rf_predictions <- predict(rf_model, newdata = X2_test)
-
-# Compute accuracy
-rf_accuracy <- mean(rf_predictions == Y2_test) * 100
-print(paste("Random Forest Test Accuracy:", round(rf_accuracy, 2), "%"))
-
-# Confusion Matrix
-library(caret)
-rf_conf_matrix <- confusionMatrix(as.factor(rf_predictions), as.factor(Y2_test))
-print(rf_conf_matrix)
-
-```
-
-```{r}
-# Plot feature importance
-varImpPlot(rf_model)
-
-```
 
 
