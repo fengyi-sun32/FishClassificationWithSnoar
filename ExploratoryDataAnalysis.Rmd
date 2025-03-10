@@ -302,8 +302,6 @@ ggplot(fish_freq_mean_long, aes(x = Frequency_kHz,
   theme_minimal()
 ```
 
-
-
 ```{r}
 #' Compute mean and 95% confidence interval
 #'
@@ -500,7 +498,7 @@ ggplot(mean_difference, aes(x = change)) +
   )
 
 ```
-Actually we can see no big change, most changes are near 0. So, I decide to keep these outliers. 
+Actually we can see no big change, most changes are near 0. So, I decided to keep these outliers. 
 ```{r}
 
 # Select only frequency response columns for PCA
@@ -620,7 +618,7 @@ p1 <- plot_species_corr("lakeTrout", freq_clean)
 p2 <- plot_species_corr("smallmouthBass", freq_clean)
 grid.arrange(p1, p2, ncol = 2)
 ```
-Since the frequency is obviously not independent to each other I decide not to use Bonferroni correction. 
+Since the frequency is obviously not independent of each other I decide not to use Bonferroni correction. 
 
 ```{r}
 # Function to compute highly correlated frequencies for a given species
@@ -692,6 +690,7 @@ cor_smallmouth_bass <- compute_feature_correlation("smallmouthBass")
 species_corr <- bind_rows(cor_lake_trout, cor_smallmouth_bass)
 species_corr
 ```
+
 ```{r}
 # Set correlation threshold for counting high correlations
 cor_threshold <- 0.4  
@@ -712,7 +711,6 @@ species_summary <- species_corr %>%
 species_summary
 
 ```
-
 
 ```{r}
 #' Prepare correlation data by extracting frequency and binning
@@ -752,7 +750,7 @@ The heatmap reveals species-specific patterns in the correlation between biologi
 
 ```{r}
 # Select relevant biological features
-bio_features <- c("totalLength", "forkLength", "weight", "girth", "sex"
+bio_features <- c("totalLength", "forkLength", "weight", "girth", "sex",
                   "airbladderTotalLength", "airBladderWidth", "airbladderWeight")
 
 # Convert data to long format for easier visualization
@@ -770,6 +768,7 @@ ggplot(bio_long, aes(x = species, y = Value, fill = species)) +
   theme(legend.position = "none", strip.text = element_text(size = 5, face = "bold"))
 
 ```
+
 ```{r}
 # Define biological features of interest
 bio_features <- c("totalLength", "forkLength", "weight", "girth", 
@@ -794,10 +793,8 @@ ggplot(df_sex_long, aes(x = sex, y = Value, fill = sex)) +
   theme(legend.position = "none")
 ```
 
-
-
 ```{r}
-# Example correlation threshold
+# correlation threshold
 cor_threshold <- 0.5  
 
 # Biological + frequency columns
@@ -836,4 +833,4 @@ corr_smb_female <- compute_sex_corr("smallmouthBass", "1")
 all_sex_corr_smb <- rbind(corr_smb_male, corr_smb_female)
 print(all_sex_corr_smb %>% arrange(desc(Correlation)))
 ```
-
+This is not focus on the project objective so I decide not to use this plot. 
