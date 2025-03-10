@@ -364,6 +364,7 @@ plot_fish_ci <- function(fish_id) {
 walk(labelled_fish, ~ print(plot_fish_ci(.x)))
 ```
 
+
 ```{r}
 #' Compute total number of unique frequencies per fish
 n_frequencies <- length(c(seq(45, 89.5, by = 0.5), seq(173, 260, by = 0.5)))
@@ -388,7 +389,7 @@ if (length(fishNum_vector) == nrow(freq_long)) {
 freq_long_with_id <- freq_long 
 freq_long_with_id$fishNum <- fishNum_vector
 ```
-
+# Outliers Checking ---------------------------------------------------------
 ```{r}
 #' Detect outliers per frequency per fish
 outliers_per_fish <- freq_long_with_id %>% 
@@ -796,7 +797,7 @@ ggplot(df_sex_long, aes(x = sex, y = Value, fill = sex)) +
   theme_minimal() +
   theme(legend.position = "none")
 ```
-# Sex Based Comparison ---------------------------------------------------------
+# Sex-Based Comparison ---------------------------------------------------------
 ```{r}
 # correlation threshold
 cor_threshold <- 0.5  
