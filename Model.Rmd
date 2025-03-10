@@ -71,13 +71,6 @@ prepare_xy <- function(train_data, test_data) {
   list(X_train = X_train, X_test = X_test, Y_train = Y_train, Y_test = Y_test)
 }
 
-# Execute X, Y preparation
-xy_data <- prepare_xy(train_data, test_data)
-X_train <- xy_data$X_train
-X_test  <- xy_data$X_test
-Y_train <- xy_data$Y_train
-Y_test  <- xy_data$Y_test
-
 ```
 
 ```{r}
@@ -101,10 +94,6 @@ train_superlearner <- function(X_train, Y_train) {
     cvControl = list(V = 5)   # 5-fold cross-validation
   )
 }
-
-# Train SuperLearner Model
-SL_model <- train_superlearner(X_train, Y_train)
-summary(SL_model)
 
 ```
 
