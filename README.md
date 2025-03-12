@@ -40,6 +40,7 @@ The dataset, referred to as `fish_clean`, is derived from raw sonar readings and
 - The frequencies are correlated so Bonferroni correction cannot be applied
   
 ## Usage
+- Download all datasets 
 - Run ExploratoryDataAnalysis.Rmd first to get fish_clean and freq_clean that will be used in the modeling stage
 - Run Model.Rmd
   
