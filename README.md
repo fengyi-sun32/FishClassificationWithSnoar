@@ -10,35 +10,18 @@ The dataset, referred to as `fish_clean`, is derived from raw sonar readings and
 - **Frequency Response Data**: Sonar frequency responses across multiple frequency bands.
 - **Preprocessing Steps**: Missing value handling, PCA for dimensionality reduction, and selection of relevant biological and frequency features.
 
-## Project Objectives
-- Perform **Exploratory Data Analysis (EDA)** to understand frequency response patterns for each species.
-- Evaluate the impact of **biological features** on classification accuracy.
-- Use **Principal Component Analysis (PCA)** to identify key frequency features.
-- Apply machine learning models via **SuperLearner** to classify species based on different feature sets.
+## Folder Structure
+Folder | Description
+---------- | --------------------------------------------------
+[Analyis_Scripts](Analysis_Scripts) | data analysis scripts
+[Data](Data) | contains the raw acoustic data and Echoview processing scripts
+[ExploratoryAnalysis](ExploratoryAnalysis) | contains code to explore and filter the data
+[ExploratoryAnalysis/FishTrack-EDA-Tool](ExploratoryAnalysis/FishTrack-EDA-Tool) | home folder for shiny app
+[ProcessedData](ProcessedData) | contains data that has been generated from data in *Data*
+[NonPingData](NonPingData) | contains fish bio data
+[ExportedFigures](ExportedFigures) | Figures generated from analysis scripts
+WritingSections | Report writing sections
 
-## Data Preprocessing
-- **Handling Missing Data**: Columns with excessive missing values are removed manually due to inconsistencies across species.
-- **Feature Selection**: Biological and frequency response features are selected based on domain knowledge.
-- **Dataset Variants for Modeling**:
-  1. All biological features + All frequency
-  2. Species-specific biological features
-  3. PCA-selected frequency range + All biological features
-  4. PCA-selected frequency range + species-specific biological features
-  5. Frequency response only
-  6. PCA-selected frequency range only
-
-## Modeling Approach
-- **SuperLearner Framework**: Combines multiple machine learning models to find the best classifier.
-- **Base Learners**: 
-  - Elastic Net (`SL.glmnet`)
-  - Random Forest (`SL.randomForest`, `SL.ranger`)
-  - XGBoost (`SL.xgboost`)
-  - Neural Network (`SL.nnet`)
-
-## Key Findings
-- PCA alone does not effectively separate species due to overlapping frequency responses.
-- The frequencies are correlated so Bonferroni correction cannot be applied
-  
 ## Usage
 - Download all datasets 
 - Run ExploratoryDataAnalysis.Rmd first to get fish_clean and freq_clean that will be used in the modeling stage
