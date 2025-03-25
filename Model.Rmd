@@ -5,13 +5,8 @@ date: "2025-03-09"
 output: html_document
 ---
 ```{r,warning=FALSE}
-#' Core SuperLearner package
-library(SuperLearner)  
-
-#' Model training and evaluation
-library(caret)  
-
-#' Required for different base learners:
+library(SuperLearner)  # Core SuperLearner package
+library(caret)         # Model training and evaluation
 library(glmnet)        # Lasso/ElasticNet Regression (SL.glmnet)
 library(randomForest)  # Random Forest (SL.randomForest)
 library(xgboost)       # Gradient Boosted Trees (SL.xgboost)
@@ -30,26 +25,28 @@ library(nnet)          # Neural Networks (SL.nnet)
 #' @param data A tibble containing fish data.
 #' @return A list containing `train_data` and `test_data`.
 split_data <- function(data) {
-  set.seed(123)  # Ensure reproducibility
-  
+  set.seed(123)
   train_list <- list()
   test_list <- list()
-  species_list <- unique(data$species)
   
-  for (sp in species_list) {
-    species_data <- filter(data, species == sp)  # Filter species data
+  for (sp in unique(data$species)) {
+    species_data <- filter(data, species == sp)
+    unique_fish <- unique(species_data$fishNum)
     
-    train_index <- createDataPartition(species_data$species, p = 0.8, list = FALSE)
+    train_fish <- sample(unique_fish, size = round(length(unique_fish) * 0.8))
+    train_data_sp <- filter(species_data, fishNum %in% train_fish)
+    test_data_sp  <- filter(species_data, !fishNum %in% train_fish)
     
-    train_list[[sp]] <- species_data[train_index, ]   # Train set for species
-    test_list[[sp]]  <- species_data[-train_index, ]  # Test set for species
+    train_list[[sp]] <- train_data_sp
+    test_list[[sp]]  <- test_data_sp
   }
   
   list(
-    train_data = bind_rows(train_list) %>% sample_frac(1),  # Shuffle
-    test_data  = bind_rows(test_list) %>% sample_frac(1)    # Shuffle
+    train_data = bind_rows(train_list) %>% sample_frac(1),
+    test_data  = bind_rows(test_list) %>% sample_frac(1)
   )
 }
+
 ```
 
 ```{r}
@@ -61,9 +58,16 @@ split_data <- function(data) {
 #' @param train_data The training dataset.
 #' @param test_data The test dataset.
 #' @return A list with `X_train`, `X_test`, `Y_train`, `Y_test`.
-prepare_xy <- function(train_data, test_data) {
-  X_train <- select(train_data, -species, -fishNum)
-  X_test  <- select(test_data, -species, -fishNum)
+prepare_xy <- function(train_data, test_data, feature_cols = NULL) {
+  if (is.null(feature_cols)) {
+    # By default, select all features except species and fishNum
+    X_train <- select(train_data, -species, -fishNum)
+    X_test  <- select(test_data, -species, -fishNum)
+  } else {
+    # If feature_cols provided, select those columns
+    X_train <- select(train_data, all_of(feature_cols)) %>% select(-species, -fishNum)
+    X_test  <- select(test_data, all_of(feature_cols)) %>% select(-species, -fishNum)
+  }
   
   Y_train <- as.numeric(factor(train_data$species, levels = c("lakeTrout", "smallmouthBass"))) - 1
   Y_test  <- as.numeric(factor(test_data$species, levels = c("lakeTrout", "smallmouthBass"))) - 1
@@ -71,13 +75,17 @@ prepare_xy <- function(train_data, test_data) {
   list(X_train = X_train, X_test = X_test, Y_train = Y_train, Y_test = Y_test)
 }
 
+
 ```
 
 ```{r}
 #' Train SuperLearner model
 #'
 #' @description
-#' This function trains a SuperLearner ensemble using multiple base learners.
+#' This function trains a SuperLearner ensemble using multiple base learners:
+#' GLM (elastic net), Random Forest, XGBoost, Neural Network, and Ranger.
+#' Note: The data is observation-level and may include multiple observations per fish,
+#' which can introduce cluster imbalance. The model does not currently adjust for this.
 #'
 #' @param X_train The feature matrix for training.
 #' @param Y_train The binary target vector for training.
@@ -105,23 +113,26 @@ split_results <- split_data(fish_clean)
 train_data <- split_results$train_data
 test_data  <- split_results$test_data
 
-# Execute X, Y preparation
+# Prepare input (X) and output (Y) datasets
 xy_data <- prepare_xy(train_data, test_data)
 X1_train <- xy_data$X_train
 X1_test  <- xy_data$X_test
 Y1_train <- xy_data$Y_train
 Y1_test  <- xy_data$Y_test
 
-# Train SuperLearner Model
-SL1 <- train_superlearner(X1_train, Y1_train)
-summary(SL1)
+# Train the SuperLearner model on training data
+SL_full <- train_superlearner(X1_train, Y1_train)
+summary(SL_full)
 
-# Get direct information from the model
-data.frame(
-  Algorithm = names(SL1$coef),  # Extract learner names
-  Weight = SL1$coef,            # Extract weights
-  CV_Risk = SL1$cvRisk           # Extract CV risk for each learner
+# Extract learner weights and CV risk into a summary dataframe
+sl_full_summary <- data.frame(
+  Algorithm = names(SL_full$coef),   # Extract learner names
+  Weight = SL_full$coef,             # Learner weights
+  CV_Risk = SL_full$cvRisk           # Cross-validation risk per learner
 )
+
+# View the result
+print(sl_full_summary)
 ```
 Since the result only provide weight for model glmnet, I decide to scale X1_train and X1_test to reducing the impact. 
 
@@ -158,38 +169,39 @@ X2_test  <- xy_data$X_test
 Y2_train <- xy_data$Y_train
 Y2_test  <- xy_data$Y_test
 
-# Train SuperLearner Model
+# Train the SuperLearner model on frequency-only data
 SL2 <- train_superlearner(X2_train, Y2_train)
 summary(SL2)
 
-# Get direct information from the model
-data.frame(
-  Algorithm = names(SL2$coef),  # Extract learner names
-  Weight = SL2$coef,            # Extract weights
-  CV_Risk = SL2$cvRisk           # Extract CV risk for each learner
+# Summarize learner performance (weights and CV risk)
+sl2_summary <- data.frame(
+  Algorithm = names(SL2$coef),  # Base learners used
+  Weight = SL2$coef,            # Learner weights
+  CV_Risk = SL2$cvRisk          # Cross-validation risk
 )
 
+# View the model summary table
+print(sl2_summary)
 ```
 
 ```{r}
-
- #' Train and evaluate XGBoost model
+#' Train and evaluate XGBoost model
 #'
 #' @description
-#' This function trains an XGBoost model and computes test accuracy.
+#' This function trains an XGBoost model and computes balanced accuracy, confusion matrix, AUC-ROC, and F1 score.
 #'
 #' @param X_train Training feature matrix.
 #' @param Y_train Training labels.
 #' @param X_test Test feature matrix.
 #' @param Y_test Test labels.
-#' @return balanced accuracy score,confusion matrix and AUC-ROC scores.
+#' @return A list including confusion matrix, balanced accuracy, AUC, and F1 score.
 
 train_xgboost <- function(X_train, Y_train, X_test, Y_test) {
   X_train_mat <- as.matrix(X_train)
   X_test_mat  <- as.matrix(X_test)
   
   xgb_model <- xgboost(data = X_train_mat, label = Y_train, 
-                       objective = "binary:logistic", nrounds = 200)
+                       objective = "binary:logistic", nrounds = 200, verbose = 0)
   
   predictions <- predict(xgb_model, newdata = X_test_mat)
   final_predictions <- ifelse(predictions > 0.5, 1, 0)
@@ -197,33 +209,37 @@ train_xgboost <- function(X_train, Y_train, X_test, Y_test) {
   accuracy <- mean(final_predictions == Y_test) * 100
   message("XGBoost Test Accuracy: ", round(accuracy, 2), "%")
   
-  # Compute confusion matrix
+  # Confusion matrix
   conf_matrix <- confusionMatrix(as.factor(final_predictions), as.factor(Y_test))
   print(conf_matrix)
   
-  # Extract sensitivity and specificity
+  # Balanced Accuracy
   sensitivity_value <- conf_matrix$byClass["Sensitivity"]
   specificity_value <- conf_matrix$byClass["Specificity"]
-  
-  # Compute Balanced Accuracy
   balanced_accuracy <- (sensitivity_value + specificity_value) / 2
   message("Balanced Accuracy: ", round(balanced_accuracy, 4))
   
-  # Compute AUC-ROC score
-  roc_curve <- roc(Y_test, predictions)  # ROC curve
-  auc_value <- auc(roc_curve)  # AUC score
+  # AUC-ROC score
+  roc_curve <- roc(Y_test, predictions)
+  auc_value <- auc(roc_curve)
   message("AUC-ROC Score: ", round(auc_value, 4))
+  
+  # F1 score calculation
+  precision <- conf_matrix$byClass["Pos Pred Value"]
+  recall <- sensitivity_value
+  f1_score <- 2 * (precision * recall) / (precision + recall)
+  message("F1 Score: ", round(f1_score, 4))
   
   return(list(
     ConfusionMatrix = conf_matrix,
     BalancedAccuracy = balanced_accuracy,
-    AUC = auc_value
+    AUC = auc_value,
+    F1_Score = f1_score
   ))
 }
 
-# Train XGBoost Model
-xgb_model <- train_xgboost(X2_train, Y2_train, X2_test, Y2_test)
-
+# Test for all frequency data:
+xgb_results <- train_xgboost(X2_train, Y2_train, X2_test, Y2_test)
 ```
 
 

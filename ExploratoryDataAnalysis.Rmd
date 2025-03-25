@@ -24,7 +24,6 @@ library(gridExtra)
 #' The dataset includes fish species, biological characteristics, and frequency response values.
 #' @source This function relies on the external script: `read_tidy_export_EVfiles.R`
 source('Analysis_Scripts/read_tidy_export_EVfiles.R')
-
 ```
 
 # Data Checking ---------------------------------------------------------
@@ -67,6 +66,7 @@ freq_only <- fish_data %>%
 table(fish_data$fishNum)
 
 ```
+
 ```{r}
 #' Identify missing frequency values per fish
 #'
