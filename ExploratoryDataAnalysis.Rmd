@@ -14,6 +14,7 @@ library(factoextra)
 library(purrr)
 library(reshape2)
 library(gridExtra)
+library(knitr)
 ```
 
 
@@ -53,12 +54,7 @@ fish_data <- processed_data %>%
 ```
 
 ```{r}
-#' Extract frequency-only data
-#'
-#' @description
-#' Creates a dataset containing only the fish number, species, and frequency response columns.
-#'
-#' @return A tibble with only frequency response data.
+
 freq_only <- fish_data %>%
   select(fishNum, species, matches("^F\\d+(\\.\\d+)?$"))
 
@@ -183,6 +179,17 @@ fish_clean <- fish_data %>%
   select(-all_of(paste0("F", missing_freq)))
 ```
 
+```{r}
+#`fish_data` is raw and `fish_clean` is cleaned
+summary_table <- tibble(
+  Stage = c("Before Cleaning", "After Cleaning","Frequency Only"),
+  Num_Rows = c(nrow(processed_data), nrow(fish_clean), nrow(freq_clean)),
+  Num_Columns = c(ncol(processed_data), ncol(fish_clean), ncol(freq_clean))
+)
+
+kable(summary_table, caption = "Dataset Size Before and After Cleaning")
+```
+
 
 # Data Transformation for Visualization -----------------------------------
 ```{r}
@@ -194,6 +201,26 @@ fish_clean <- fish_clean %>%
     across(starts_with("F"), ~ type.convert(.x, as.is = TRUE)),  # Convert frequency columns
     sex = as.numeric(sex)  # Convert sex to numeric
   )
+```
+
+```{r}
+# Count unique fish per species
+species_counts <- fish_clean %>%
+  select(fishNum, species) %>%
+  distinct() %>%
+  count(species)
+
+# Plot
+ggplot(species_counts, aes(x = species, y = n, fill = species)) +
+  geom_col(width = 0.6) +
+  labs(
+    title = "Number of Unique Fish per Species",
+    x = "Species",
+    y = "Count of Unique Fish"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
 ```
 
 ```{r}
@@ -470,7 +497,7 @@ mean_difference <- mean_strength_before %>%
   mutate(change = mean_strength_after - mean_strength_before) %>%
   arrange(desc(abs(change)))  # Sort by largest absolute change
 
-#' Print summary of mean differences
+#Print summary of mean differences
 print(mean_difference)
 ```
 

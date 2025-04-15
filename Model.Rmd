@@ -12,7 +12,28 @@ library(randomForest)  # Random Forest (SL.randomForest)
 library(xgboost)       # Gradient Boosted Trees (SL.xgboost)
 library(ranger)        # Fast Random Forest (SL.ranger)
 library(nnet)          # Neural Networks (SL.nnet)
+library(pROC)
+library(cvAUC)
+```
 
+```{r}
+set.seed(123)
+# Determine how many Lake Trout and SMB fish
+fish_counts <- fish_clean %>%
+  group_by(species, fishNum) %>%
+  summarise(n_obs = n(), .groups = "drop_last") %>%
+  ungroup()
+
+# Select equal number of fish from each species 
+sampled_fish <- fish_counts %>%
+  group_by(species) %>%
+  slice_sample(n = 10)
+
+# Then use fishNum from this table to extract the corresponding observations
+balanced_fish_data <- fish_clean %>%
+  filter(fishNum %in% sampled_fish$fishNum)
+balanced_freq_data <- freq_clean %>%
+  filter(fishNum %in% sampled_fish$fishNum)
 ```
 
 ```{r}
@@ -98,7 +119,7 @@ train_superlearner <- function(X_train, Y_train) {
     X = X_train, 
     family = binomial(),
     SL.library = learners,
-    method = "method.NNLS",  # Non-negative least squares
+    method = "method.AUC",  
     cvControl = list(V = 5)   # 5-fold cross-validation
   )
 }
@@ -109,7 +130,7 @@ train_superlearner <- function(X_train, Y_train) {
 # 1. All Biological Features + All Frequencies
 
 # Execute data split
-split_results <- split_data(fish_clean)
+split_results <- split_data(balanced_fish_data)
 train_data <- split_results$train_data
 test_data  <- split_results$test_data
 
@@ -119,20 +140,23 @@ X1_train <- xy_data$X_train
 X1_test  <- xy_data$X_test
 Y1_train <- xy_data$Y_train
 Y1_test  <- xy_data$Y_test
+```
 
+
+```{r}
 # Train the SuperLearner model on training data
-SL_full <- train_superlearner(X1_train, Y1_train)
-summary(SL_full)
+SL1 <- train_superlearner(X1_train, Y1_train)
+summary(SL1)
 
 # Extract learner weights and CV risk into a summary dataframe
-sl_full_summary <- data.frame(
-  Algorithm = names(SL_full$coef),   # Extract learner names
-  Weight = SL_full$coef,             # Learner weights
-  CV_Risk = SL_full$cvRisk           # Cross-validation risk per learner
+sl1_summary <- data.frame(
+  Algorithm = names(SL1$coef),   # Extract learner names
+  Weight = SL1$coef,             # Learner weights
+  CV_Risk = SL1$cvRisk           # Cross-validation risk per learner
 )
 
 # View the result
-print(sl_full_summary)
+print(sl1_summary)
 ```
 Since the result only provide weight for model glmnet, I decide to scale X1_train and X1_test to reducing the impact. 
 
@@ -158,7 +182,7 @@ I decide not to use all biological feature data + all frequency data due to the 
 # 2. Only Frequencies response
 
 # Execute data split
-split_results <- split_data(freq_clean)
+split_results <- split_data(balanced_freq_data)
 train_data <- split_results$train_data
 test_data  <- split_results$test_data
 
@@ -168,7 +192,10 @@ X2_train <- xy_data$X_train
 X2_test  <- xy_data$X_test
 Y2_train <- xy_data$Y_train
 Y2_test  <- xy_data$Y_test
+```
 
+
+```{r}
 # Train the SuperLearner model on frequency-only data
 SL2 <- train_superlearner(X2_train, Y2_train)
 summary(SL2)
@@ -242,7 +269,106 @@ train_xgboost <- function(X_train, Y_train, X_test, Y_test) {
 xgb_results <- train_xgboost(X2_train, Y2_train, X2_test, Y2_test)
 ```
 
+```{r}
+#Train Random Forest model
+rf_result_all_freq <- train_random_forest(X2_train, Y2_train, X2_test, Y2_test)
+```
 
+```{r}
+# 3. PCA Frequencies response
+# Execute data split
+pca_freq <- balanced_freq_data  %>% 
+  select(fishNum, species, any_of(paste0("F", seq(63, 77, by = 0.5))))
+split_results <- split_data(pca_freq)
+train_data <- split_results$train_data
+test_data  <- split_results$test_data
+
+# Execute X, Y preparation
+xy_data <- prepare_xy(train_data, test_data)
+X3_train <- xy_data$X_train
+X3_test  <- xy_data$X_test
+Y3_train <- xy_data$Y_train
+Y3_test  <- xy_data$Y_test
+```
+
+```{r}
+# Train the SuperLearner model on frequency-only data
+SL3 <- train_superlearner(X3_train, Y3_train)
+summary(SL3)
+
+# Summarize learner performance (weights and CV risk)
+sl3_summary <- data.frame(
+  Algorithm = names(SL3$coef),  # Base learners used
+  Weight = SL3$coef,            # Learner weights
+  CV_Risk = SL3$cvRisk          # Cross-validation risk
+)
+
+# View the model summary table
+print(sl3_summary)
+```
+```{r}
+#' Train and evaluate Random Forest model
+#'
+#' @description
+#' This function trains a Random Forest model and evaluates its performance using 
+#' confusion matrix, balanced accuracy, AUC-ROC, and F1 score.
+#'
+#' @param X_train Training feature matrix.
+#' @param Y_train Training labels.
+#' @param X_test Test feature matrix.
+#' @param Y_test Test labels.
+#' @return A list including confusion matrix, balanced accuracy, AUC, and F1 score.
+
+train_random_forest <- function(X_train, Y_train, X_test, Y_test) {
+  
+  # Train model (Y must be factor for classification)
+  Y_train_factor <- as.factor(Y_train)
+  rf_model <- randomForest(x = X_train, y = Y_train_factor, ntree = 200, importance = TRUE)
+  
+  # Predictions
+  rf_predictions <- predict(rf_model, newdata = X_test)
+  rf_probabilities <- predict(rf_model, newdata = X_test, type = "prob")[, 2]  # Prob for class "1"
+  
+  # Confusion matrix
+  conf_matrix <- confusionMatrix(as.factor(rf_predictions), as.factor(Y_test))
+  print(conf_matrix)
+  
+  # Balanced Accuracy
+  sensitivity_value <- conf_matrix$byClass["Sensitivity"]
+  specificity_value <- conf_matrix$byClass["Specificity"]
+  balanced_accuracy <- (sensitivity_value + specificity_value) / 2
+  message("Balanced Accuracy: ", round(balanced_accuracy, 4))
+  
+  # AUC-ROC score
+  roc_curve <- roc(Y_test, rf_probabilities)
+  auc_value <- auc(roc_curve)
+  message("AUC-ROC Score: ", round(auc_value, 4))
+  
+  # F1 score
+  precision <- conf_matrix$byClass["Pos Pred Value"]
+  recall <- sensitivity_value
+  f1_score <- 2 * (precision * recall) / (precision + recall)
+  message("F1 Score: ", round(f1_score, 4))
+  
+  return(list(
+    ConfusionMatrix = conf_matrix,
+    BalancedAccuracy = balanced_accuracy,
+    AUC = auc_value,
+    F1_Score = f1_score
+  ))
+}
+```
+
+
+```{r}
+rf_result_pca_freq <- train_random_forest(X3_train, Y3_train, X3_test, Y3_test)
+
+
+```
+
+```{r}
+
+```
 
 
 
