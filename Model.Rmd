@@ -12,29 +12,10 @@ library(randomForest)  # Random Forest (SL.randomForest)
 library(xgboost)       # Gradient Boosted Trees (SL.xgboost)
 library(ranger)        # Fast Random Forest (SL.ranger)
 library(nnet)          # Neural Networks (SL.nnet)
-library(pROC)
-library(cvAUC)
+library(pROC)          # ROC analysis
+library(cvAUC)         # Cross-validated AUC calculation
 ```
 
-```{r}
-set.seed(123)
-# Determine how many Lake Trout and SMB fish
-fish_counts <- fish_clean %>%
-  group_by(species, fishNum) %>%
-  summarise(n_obs = n(), .groups = "drop_last") %>%
-  ungroup()
-
-# Select equal number of fish from each species 
-sampled_fish <- fish_counts %>%
-  group_by(species) %>%
-  slice_sample(n = 10)
-
-# Then use fishNum from this table to extract the corresponding observations
-balanced_fish_data <- fish_clean %>%
-  filter(fishNum %in% sampled_fish$fishNum)
-balanced_freq_data <- freq_clean %>%
-  filter(fishNum %in% sampled_fish$fishNum)
-```
 
 ```{r}
 #' Split dataset into training and test sets
@@ -46,7 +27,7 @@ balanced_freq_data <- freq_clean %>%
 #' @param data A tibble containing fish data.
 #' @return A list containing `train_data` and `test_data`.
 split_data <- function(data) {
-  set.seed(123)
+  set.seed(555)
   train_list <- list()
   test_list <- list()
   
@@ -92,7 +73,6 @@ prepare_xy <- function(train_data, test_data, feature_cols = NULL) {
   
   Y_train <- as.numeric(factor(train_data$species, levels = c("lakeTrout", "smallmouthBass"))) - 1
   Y_test  <- as.numeric(factor(test_data$species, levels = c("lakeTrout", "smallmouthBass"))) - 1
-  
   list(X_train = X_train, X_test = X_test, Y_train = Y_train, Y_test = Y_test)
 }
 
@@ -100,18 +80,22 @@ prepare_xy <- function(train_data, test_data, feature_cols = NULL) {
 ```
 
 ```{r}
-#' Train SuperLearner model
+#' Train SuperLearner Model with Optional Meta-Learner Method
 #'
 #' @description
-#' This function trains a SuperLearner ensemble using multiple base learners:
-#' GLM (elastic net), Random Forest, XGBoost, Neural Network, and Ranger.
-#' Note: The data is observation-level and may include multiple observations per fish,
-#' which can introduce cluster imbalance. The model does not currently adjust for this.
+#' This function trains a SuperLearner ensemble model using multiple base learners:
+#' GLMnet (elastic net logistic regression), Random Forest, XGBoost, Neural Network,
+#' and Ranger (fast random forest). The ensemble weights are optimized using a specified
+#' meta-learning method (default: method.AUC for AUC optimization).
 #'
-#' @param X_train The feature matrix for training.
-#' @param Y_train The binary target vector for training.
-#' @return A trained SuperLearner model.
-train_superlearner <- function(X_train, Y_train) {
+#' @param X_train A data frame or tibble containing the training feature matrix.
+#' @param Y_train A numeric or factor vector containing binary target labels for training.
+#'   The labels should be coded as 0 (lakeTrout) and 1 (smallmouthBass).
+#' @param meta_method A character string specifying the meta-learning method to use.
+#'   Defaults to "method.AUC". Other options include "method.NNLS" or "method.NNloglik", etc.
+#'
+#' @return A trained SuperLearner model object.
+train_superlearner <- function(X_train, Y_train, meta_method = "method.AUC") {
   learners <- c("SL.glmnet", "SL.randomForest", "SL.xgboost", "SL.nnet", "SL.ranger")
   
   SuperLearner(
@@ -119,20 +103,26 @@ train_superlearner <- function(X_train, Y_train) {
     X = X_train, 
     family = binomial(),
     SL.library = learners,
-    method = "method.AUC",  
+    method = meta_method,  
     cvControl = list(V = 5)   # 5-fold cross-validation
   )
 }
 
 ```
 
-```{r}
-# 1. All Biological Features + All Frequencies
+# 1. All Biological Features + All Frequencies----------------------------------
 
+```{r}
 # Execute data split
-split_results <- split_data(balanced_fish_data)
-train_data <- split_results$train_data
-test_data  <- split_results$test_data
+split_results1 <- split_data(fish_clean)
+train_data <- split_results1$train_data
+test_data  <- split_results1$test_data
+
+# check species balance
+cat("Training set species distribution:\n")
+print(table(train_data$species))
+cat("Test set species distribution:\n")
+print(table(test_data$species))
 
 # Prepare input (X) and output (Y) datasets
 xy_data <- prepare_xy(train_data, test_data)
@@ -144,7 +134,7 @@ Y1_test  <- xy_data$Y_test
 
 
 ```{r}
-# Train the SuperLearner model on training data
+# Train the SuperLearner model on All bio + All freq data
 SL1 <- train_superlearner(X1_train, Y1_train)
 summary(SL1)
 
@@ -158,58 +148,7 @@ sl1_summary <- data.frame(
 # View the result
 print(sl1_summary)
 ```
-Since the result only provide weight for model glmnet, I decide to scale X1_train and X1_test to reducing the impact. 
-
-```{r}
-# Standardize X_train and X_test
-X1_train_scaled <- as.data.frame(scale(X1_train))
-X1_test_scaled <- as.data.frame(scale(X1_test))
-
-SL1_scaled <- train_superlearner(X1_train_scaled, Y1_train)
-
-```
-
-```{r}
-data.frame(
-  Algorithm = names(SL1_scaled$coef),  # Extract learner names
-  Weight = SL1_scaled$coef,            # Extract weights
-  CV_Risk = SL1_scaled$cvRisk           # Extract CV risk for each learner
-)
-```
-I decide not to use all biological feature data + all frequency data due to the high correlation between species and biological features which makes glmnet model dominate but our main objective is using frequency response to classify the fish species.
-
-```{r}
-# 2. Only Frequencies response
-
-# Execute data split
-split_results <- split_data(balanced_freq_data)
-train_data <- split_results$train_data
-test_data  <- split_results$test_data
-
-# Execute X, Y preparation
-xy_data <- prepare_xy(train_data, test_data)
-X2_train <- xy_data$X_train
-X2_test  <- xy_data$X_test
-Y2_train <- xy_data$Y_train
-Y2_test  <- xy_data$Y_test
-```
-
-
-```{r}
-# Train the SuperLearner model on frequency-only data
-SL2 <- train_superlearner(X2_train, Y2_train)
-summary(SL2)
-
-# Summarize learner performance (weights and CV risk)
-sl2_summary <- data.frame(
-  Algorithm = names(SL2$coef),  # Base learners used
-  Weight = SL2$coef,            # Learner weights
-  CV_Risk = SL2$cvRisk          # Cross-validation risk
-)
-
-# View the model summary table
-print(sl2_summary)
-```
+In cases where SuperLearner assigns uniform weights across all base learners, we default to XGBoost for its proven robustness and prior strong performance on similar data variants.
 
 ```{r}
 #' Train and evaluate XGBoost model
@@ -264,48 +203,13 @@ train_xgboost <- function(X_train, Y_train, X_test, Y_test) {
     F1_Score = f1_score
   ))
 }
-
-# Test for all frequency data:
-xgb_results <- train_xgboost(X2_train, Y2_train, X2_test, Y2_test)
 ```
 
 ```{r}
-#Train Random Forest model
-rf_result_all_freq <- train_random_forest(X2_train, Y2_train, X2_test, Y2_test)
+# Show the evaluation on XGBoost result for All frequency + All bio data
+data1_xg_result <- train_xgboost(X1_train, Y1_train, X1_test, Y1_test)
 ```
 
-```{r}
-# 3. PCA Frequencies response
-# Execute data split
-pca_freq <- balanced_freq_data  %>% 
-  select(fishNum, species, any_of(paste0("F", seq(63, 77, by = 0.5))))
-split_results <- split_data(pca_freq)
-train_data <- split_results$train_data
-test_data  <- split_results$test_data
-
-# Execute X, Y preparation
-xy_data <- prepare_xy(train_data, test_data)
-X3_train <- xy_data$X_train
-X3_test  <- xy_data$X_test
-Y3_train <- xy_data$Y_train
-Y3_test  <- xy_data$Y_test
-```
-
-```{r}
-# Train the SuperLearner model on frequency-only data
-SL3 <- train_superlearner(X3_train, Y3_train)
-summary(SL3)
-
-# Summarize learner performance (weights and CV risk)
-sl3_summary <- data.frame(
-  Algorithm = names(SL3$coef),  # Base learners used
-  Weight = SL3$coef,            # Learner weights
-  CV_Risk = SL3$cvRisk          # Cross-validation risk
-)
-
-# View the model summary table
-print(sl3_summary)
-```
 ```{r}
 #' Train and evaluate Random Forest model
 #'
@@ -359,16 +263,330 @@ train_random_forest <- function(X_train, Y_train, X_test, Y_test) {
 }
 ```
 
+# 2. Only Frequencies response -------------------------------------------------
 
 ```{r}
-rf_result_pca_freq <- train_random_forest(X3_train, Y3_train, X3_test, Y3_test)
+# Execute data split
+split_results2 <- split_data(freq_clean)
+train_data <- split_results2$train_data
+test_data  <- split_results2$test_data
 
+# Execute X, Y preparation
+xy_data <- prepare_xy(train_data, test_data)
+X2_train <- xy_data$X_train
+X2_test  <- xy_data$X_test
+Y2_train <- xy_data$Y_train
+Y2_test  <- xy_data$Y_test
+```
+
+
+```{r}
+# Train the SuperLearner model on frequency-only data
+SL2 <- train_superlearner(X2_train, Y2_train)
+summary(SL2)
+
+# Summarize learner performance (weights and CV risk)
+sl2_summary <- data.frame(
+  Algorithm = names(SL2$coef),  # Base learners used
+  Weight = SL2$coef,            # Learner weights
+  CV_Risk = SL2$cvRisk          # Cross-validation risk
+)
+
+# View the model summary table
+print(sl2_summary)
+```
+
+```{r}
+#' Train and evaluate Ranger model
+#'
+#' @description
+#' This function trains a Ranger (fast Random Forest) model and evaluates its performance using 
+#' confusion matrix, balanced accuracy, AUC-ROC, and F1 score.
+#'
+#' @param X_train Training feature matrix.
+#' @param Y_train Training labels.
+#' @param X_test Test feature matrix.
+#' @param Y_test Test labels.
+#' @return A list including confusion matrix, balanced accuracy, AUC, and F1 score.
+
+train_ranger <- function(X_train, Y_train, X_test, Y_test) {
+  # Ensure Y is factor for classification
+  Y_train_factor <- as.factor(Y_train)
+  
+  # Train the ranger model
+  ranger_model <- ranger::ranger(
+    formula = Y_train_factor ~ .,
+    data = cbind(Y_train_factor, X_train),
+    probability = TRUE,
+    num.trees = 300,
+    importance = "impurity"
+  )
+  
+  # Predict probabilities and classes
+  predictions <- predict(ranger_model, data = X_test)
+  predicted_probs <- predictions$predictions[, 2]
+  predicted_classes <- ifelse(predicted_probs > 0.5, 1, 0)
+  
+  # Confusion matrix
+  conf_matrix <- caret::confusionMatrix(as.factor(predicted_classes), as.factor(Y_test))
+  print(conf_matrix)
+  
+  # Balanced Accuracy
+  sensitivity_value <- conf_matrix$byClass["Sensitivity"]
+  specificity_value <- conf_matrix$byClass["Specificity"]
+  balanced_accuracy <- (sensitivity_value + specificity_value) / 2
+  message("Balanced Accuracy: ", round(balanced_accuracy, 4))
+  
+  # AUC-ROC
+  roc_curve <- pROC::roc(Y_test, predicted_probs)
+  auc_value <- pROC::auc(roc_curve)
+  message("AUC-ROC Score: ", round(auc_value, 4))
+  
+  # F1 score
+  precision <- conf_matrix$byClass["Pos Pred Value"]
+  recall <- sensitivity_value
+  f1_score <- 2 * (precision * recall) / (precision + recall)
+  message("F1 Score: ", round(f1_score, 4))
+  
+  return(list(
+    ConfusionMatrix = conf_matrix,
+    BalancedAccuracy = balanced_accuracy,
+    AUC = auc_value,
+    F1_Score = f1_score
+  ))
+}
+
+```
+
+
+```{r}
+# Show the evaluation on ranger result for All frequency data
+data2_ranger_result <- train_ranger(X2_train, Y2_train, X2_test, Y2_test)
+```
+
+# 3. PCA Frequencies response --------------------------------------------------
+
+```{r}
+# Execute data split
+pca_freq <- freq_clean %>% 
+  select(fishNum, species, any_of(paste0("F", seq(63, 77, by = 0.5))))
+split_results3 <- split_data(pca_freq)
+train_data <- split_results3$train_data
+test_data  <- split_results3$test_data
+
+# Execute X, Y preparation
+xy_data <- prepare_xy(train_data, test_data)
+X3_train <- xy_data$X_train
+X3_test  <- xy_data$X_test
+Y3_train <- xy_data$Y_train
+Y3_test  <- xy_data$Y_test
+```
+
+```{r}
+# Train the SuperLearner model on PCA-frequency data
+SL3 <- train_superlearner(X3_train, Y3_train)
+summary(SL3)
+
+# Summarize learner performance (weights and CV risk)
+sl3_summary <- data.frame(
+  Algorithm = names(SL3$coef),  # Base learners used
+  Weight = SL3$coef,            # Learner weights
+  CV_Risk = SL3$cvRisk          # Cross-validation risk
+)
+
+# View the model summary table
+print(sl3_summary)
+```
+
+```{r}
+# Show the evaluation on random forest result for PCA-frequency data
+data3_rf_result <- train_random_forest(X3_train, Y3_train, X3_test, Y3_test)
+```
+
+# 4. Species-Specific Bio Feature + PCA Frequencies response -------------------
+
+```{r}
+# Step 1: Get top 3 features for each species
+top3_features_by_species <- species_summary %>%
+  group_by(species) %>%
+  slice_max(order_by = Max_Correlation, n = 3)
+
+# Step 2: Split by species
+lt_features <- top3_features_by_species %>%
+  filter(species == "lakeTrout") %>%
+  pull(Variable1)
+
+smb_features <- top3_features_by_species %>%
+  filter(species == "smallmouthBass") %>%
+  pull(Variable1)
+
+# Step 3: Create species-specific datasets
+lt_data <- fish_clean %>%
+  filter(species == "lakeTrout") %>%
+  select(
+    fishNum, species,
+    all_of(lt_features),
+    any_of(paste0("F", seq(63, 77, by = 0.5)))
+  )
+
+smb_data <- fish_clean %>%
+  filter(species == "smallmouthBass") %>%
+  select(
+    fishNum, species,
+    all_of(smb_features),
+    any_of(paste0("F", seq(63, 77, by = 0.5)))
+  )
+
+selected_bio_pca_data <- bind_rows(lt_data, smb_data) %>%
+  mutate(across(where(is.numeric), ~ ifelse(is.na(.), 0, .))) 
+
+split_results4 <- split_data(selected_bio_pca_data)
+train_data <- split_results4$train_data
+test_data  <- split_results4$test_data
+
+# Execute X, Y preparation
+xy_data <- prepare_xy(train_data, test_data)
+X4_train <- xy_data$X_train
+X4_test  <- xy_data$X_test
+Y4_train <- xy_data$Y_train
+Y4_test  <- xy_data$Y_test
+```
+
+```{r}
+# Train the SuperLearner model on selected Bio Feature + PCA Freq data
+SL4 <- train_superlearner(X4_train, Y4_train)
+summary(SL4)
+
+# Summarize learner performance (weights and CV risk)
+sl4_summary <- data.frame(
+  Algorithm = names(SL4$coef),  # Base learners used
+  Weight = SL4$coef,            # Learner weights
+  CV_Risk = SL4$cvRisk          # Cross-validation risk
+)
+
+# View the model summary table
+print(sl4_summary)
+```
+
+```{r}
+# Show the evaluation on XGBoost result for selected Bio Feature + PCA Freq data
+data4_xg_result <- train_xgboost(X4_train, Y4_train, X4_test, Y4_test)
+```
+
+
+# 5.Species-Specific Bio Feature + All Frequencies response --------------------
+
+```{r}
+# Step 1: Get top 3 features for each species
+top3_features_by_species <- species_summary %>%
+  group_by(species) %>%
+  slice_max(order_by = Max_Correlation, n = 3)
+
+# Step 2: Split by species
+lt_features <- top3_features_by_species %>%
+  filter(species == "lakeTrout") %>%
+  pull(Variable1)
+
+smb_features <- top3_features_by_species %>%
+  filter(species == "smallmouthBass") %>%
+  pull(Variable1)
+
+# Step 3: Create species-specific datasets
+lt_data <- fish_clean %>%
+  filter(species == "lakeTrout") %>%
+  select(
+    fishNum, species,
+    all_of(lt_features),
+    matches("^F\\d+(\\.\\d+)?$")
+  )
+
+smb_data <- fish_clean %>%
+  filter(species == "smallmouthBass") %>%
+  select(
+    fishNum, species,
+    all_of(smb_features),
+    matches("^F\\d+(\\.\\d+)?$")
+  )
+
+selected_bio_freq_data <- bind_rows(lt_data, smb_data) %>%
+  mutate(across(where(is.numeric), ~ ifelse(is.na(.), 0, .))) 
+
+split_results5 <- split_data(selected_bio_freq_data)
+train_data <- split_results5$train_data
+test_data  <- split_results5$test_data
+
+# Execute X, Y preparation
+xy_data <- prepare_xy(train_data, test_data)
+X5_train <- xy_data$X_train
+X5_test  <- xy_data$X_test
+Y5_train <- xy_data$Y_train
+Y5_test  <- xy_data$Y_test
 
 ```
 
 ```{r}
+# Train the SuperLearner model on selected Bio Feature + all Freq data
+SL5 <- train_superlearner(X5_train, Y5_train)
+summary(SL5)
+
+# Summarize learner performance (weights and CV risk)
+sl5_summary <- data.frame(
+  Algorithm = names(SL5$coef),  # Base learners used
+  Weight = SL5$coef,            # Learner weights
+  CV_Risk = SL5$cvRisk          # Cross-validation risk
+)
+
+# View the model summary table
+print(sl5_summary)
+```
+
+```{r}
+# Show the evaluation on XGBoost result for selected Bio Feature + all Freq data
+data5_xg_result <- train_xgboost(X5_train, Y5_train, X5_test, Y5_test)
+```
+
+# 6. All Bio Feature + PCA Frequencies response --------------------------------
+
+```{r}
+# Execute data split
+pca_and_all_bio_data <- fish_clean %>% 
+  select(
+    fishNum, species, 
+    totalLength, forkLength, weight, girth, dorsoLatHeight, sex,
+    airbladderTotalLength, airBladderWidth, airbladderWeight,
+    any_of(paste0("F", seq(63, 77, by = 0.5)))
+  )
+split_results6 <- split_data(pca_and_all_bio_data)
+train_data <- split_results6$train_data
+test_data  <- split_results6$test_data
+
+# Execute X, Y preparation
+xy_data <- prepare_xy(train_data, test_data)
+X6_train <- xy_data$X_train
+X6_test  <- xy_data$X_test
+Y6_train <- xy_data$Y_train
+Y6_test  <- xy_data$Y_test
 
 ```
 
+```{r}
+# Train the SuperLearner model on all Bio Feature + PCA Freq data
+SL6 <- train_superlearner(X6_train, Y6_train)
+summary(SL6)
 
+# Summarize learner performance (weights and CV risk)
+sl6_summary <- data.frame(
+  Algorithm = names(SL6$coef),  # Base learners used
+  Weight = SL6$coef,            # Learner weights
+  CV_Risk = SL6$cvRisk          # Cross-validation risk
+)
+
+# View the model summary table
+print(sl6_summary)
+```
+
+```{r}
+# Show the evaluation on XGBoost result for all Bio Feature + PCA Freq data
+data6_xg_result <- train_xgboost(X6_train, Y6_train, X6_test, Y6_test)
+```
 
