@@ -29,7 +29,7 @@ File | Purpose
 `ExploratoryDataAnalysis.Rmd` | Cleans data, explores frequency patterns, performs PCA  
 `Model.Rmd` | Runs SuperLearner with multiple dataset variations
 
-##️ Usage Instructions
+## Usage Instructions
 
 To replicate the workflow locally:
 
