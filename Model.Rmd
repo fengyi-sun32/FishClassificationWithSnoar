@@ -16,6 +16,7 @@ library(pROC)          # ROC analysis
 library(cvAUC)         # Cross-validated AUC calculation
 ```
 
+# Building Function for Splitting Data into Train and Test ---------------------
 
 ```{r}
 #' Split dataset into training and test sets
@@ -51,6 +52,7 @@ split_data <- function(data) {
 
 ```
 
+
 ```{r}
 #' Prepare input (X) and output (Y) datasets
 #'
@@ -78,6 +80,8 @@ prepare_xy <- function(train_data, test_data, feature_cols = NULL) {
 
 
 ```
+
+# Buiding Function for Training SuperLearner Model -----------------------------
 
 ```{r}
 #' Train SuperLearner Model with Optional Meta-Learner Method
@@ -109,6 +113,8 @@ train_superlearner <- function(X_train, Y_train, meta_method = "method.AUC") {
 }
 
 ```
+
+## Model Training on Six Dataset Variants 
 
 # 1. All Biological Features + All Frequencies----------------------------------
 

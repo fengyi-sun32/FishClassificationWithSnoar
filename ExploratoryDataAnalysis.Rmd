@@ -23,7 +23,7 @@ library(knitr)
 source('AnalysisScripts/read_tidy_export_EVfiles.R')
 ```
 
-# Data Checking ---------------------------------------------------------
+# Data Checking ----------------------------------------------------------------
 
 ```{r}
 # Filter dataset to retain only Lake Trout and Smallmouth Bass
@@ -127,7 +127,8 @@ ggplot(missing_heatmap_data, aes(x = Frequency, y = reorder(fishNum, Frequency))
   scale_fill_manual(values = c("lakeTrout" = "#1f77b4", "smallmouthBass" = "#ff7f0e")) +
   scale_x_continuous(breaks = seq(45, 260, by = 25))  # Adjust frequency breaks as needed
 ```
-# Data Cleaning ----------------------------------------------------------
+
+# Data Cleaning ----------------------------------------------------------------
 
 ```{r}
 # Identify missing values for a specific fish (LT008) in 173–260 kHz range
@@ -165,7 +166,7 @@ fish_clean <- fish_data %>%
 ```
 
 ```{r}
-# fish_data` is raw and `fish_clean` is cleaned
+# 'fish_data` is raw and `fish_clean` is cleaned
 summary_table <- tibble(
   Stage = c("Before Cleaning", "After Cleaning","Frequency Only"),
   Num_Rows = c(nrow(processed_data), nrow(fish_clean), nrow(freq_clean)),
@@ -176,7 +177,8 @@ kable(summary_table, caption = "Dataset Size Before and After Cleaning")
 ```
 
 
-# Data Transformation for Visualization -----------------------------------
+# Data Transformation for Visualization ----------------------------------------
+
 ```{r}
 # Convert frequency and sex values to numeric
 freq_clean <- freq_clean %>%
@@ -421,7 +423,7 @@ freq_long_with_id <- freq_long
 freq_long_with_id$fishNum <- fishNum_vector
 ```
 
-# Outliers Checking ---------------------------------------------------------
+# Outliers Checking ------------------------------------------------------------
 
 ```{r}
 # Detect outliers per frequency per fish
@@ -530,7 +532,7 @@ ggplot(mean_difference, aes(x = change)) +
 ```
 Actually we can see no big change, most changes are near 0. So, I decided to keep these outliers. 
 
-# PCA ---------------------------------------------------------
+# PCA --------------------------------------------------------------------------
 
 ```{r}
 # Select only frequency response columns for PCA
