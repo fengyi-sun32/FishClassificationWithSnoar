@@ -20,7 +20,7 @@ Folder | Description
 [ProcessedData](ProcessedData) | contains data that has been generated from data in *Data*
 [NonPingData](NonPingData) | contains fish bio data
 [ExportedFigures](ExportedFigures) | Figures generated from analysis scripts
-WritingSections | Report writing sections
+[Report](Report) | Report writing sections, including result table
 
 ## R Markdown Files
 
